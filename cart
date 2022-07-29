@@ -1,0 +1,1400 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:coris/bloc/format_rupiah.dart';
+import 'package:coris/bloc/format_sparator.dart';
+import 'package:coris/bloc/product_count_dus.dart';
+import 'package:coris/bloc/product_count_tin.dart';
+import 'package:coris/db/cart_canvas_gimmick.dart';
+import 'package:coris/db/cart_canvas_hadiah.dart';
+import 'package:coris/db/cart_canvas_item_discount_percent_query.dart';
+import 'package:coris/db/cart_canvas_item_query.dart';
+import 'package:coris/db/cart_canvas_query.dart';
+import 'package:coris/db/cart_item_query.dart';
+import 'package:coris/db/logapi_query.dart';
+import 'package:coris/db/pricelist_item_query.dart';
+import 'package:coris/db/product_query.dart';
+import 'package:coris/model/data/cart_canvas_data.dart';
+import 'package:coris/model/data/log_api_data.dart';
+import 'package:coris/modules/Activity/outside_order_screen.dart';
+import 'package:coris/modules/Canvas/Cart/bloc/add_gimmick_notifier.dart';
+import 'package:coris/modules/Canvas/Cart/bloc/add_hadiah_notifier.dart';
+import 'package:coris/modules/Canvas/Cart/components/add_free_product.dart';
+import 'package:coris/modules/Canvas/Cart/components/add_gimmick.dart';
+import 'package:coris/modules/Canvas/Cart/components/edit_cart_canvas_item.dart';
+import 'package:coris/modules/Canvas/Cart/components/free_product_drop.dart';
+import 'package:coris/modules/Canvas/Cart/components/free_product_item.dart';
+import 'package:coris/modules/Canvas/Cart/components/gimmick_drop.dart';
+import 'package:coris/modules/Canvas/Cart/components/gimmick_item.dart';
+import 'package:coris/preferences.dart';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:odoo_rpc/odoo_rpc.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class CartCanvasScreen extends StatefulWidget {
+  CartCanvasScreen({Key? key, required this.partner}) : super(key: key);
+  var partner;
+
+  @override
+  State<CartCanvasScreen> createState() => _CartCanvasScreenState();
+}
+
+class _CartCanvasScreenState extends State<CartCanvasScreen> {
+  var notePesanan = TextEditingController();
+  List<CartCanvasData> dataCartCanvas = [];
+
+  Future getCartCanvasItemFromCartCanvas() async {
+    var getCartCanvas = await CartCanvasQuery.instance
+        .getCartCanvasByPartner(widget.partner.idPartner);
+
+    var getCartCanvasItem = await CartCanvasItemQuery.instance
+        .getCartCanvasItemByCartCanvas(getCartCanvas[0].id);
+    return getCartCanvasItem;
+  }
+
+  Future getListHadiah() async {
+    var getCartCanvas = await CartCanvasQuery.instance
+        .getCartCanvasByPartner(widget.partner.idPartner);
+
+    var dataCartCanvasHadiah = await CartCanvasHadiahQuery.instance
+        .getCartCanvasHadiahByCartCanvas(getCartCanvas[0].id);
+    return dataCartCanvasHadiah;
+  }
+
+  Future getListGimmick() async {
+    var getCartCanvas = await CartCanvasQuery.instance
+        .getCartCanvasByPartner(widget.partner.idPartner);
+    var dataCartCanvasGimmick = await CartCanvasGimmickQuery.instance
+        .getCartCanvasGimmickByCartCanvas(getCartCanvas[0].id);
+    return dataCartCanvasGimmick;
+  }
+
+  Future getListDiscPercent(id) async {
+    var dataListDiscPercent = await CartCanvasItemDiscountPercentQuery.instance
+        .getCartCanvasItemDiscountPercentByCartCanvasItem(id);
+    return dataListDiscPercent;
+  }
+
+  Future getProductFromId(id) async {
+    var getProduct = await ProductQuery.instance.getAllProductByProductId(id);
+    return getProduct;
+  }
+
+  Future qtyConvertDusNTin(qty, product) async {
+    var getProduct =
+        await ProductQuery.instance.getAllProductByProductId(product);
+    var _dus = await productCountDus(qty, getProduct[0].totalTinInDus);
+    var _tin = await productCountTin(qty, getProduct[0].totalTinInDus);
+    return '${_dus} Dus | ${_tin} Tin';
+  }
+
+  Future totalCount() async {
+    var getCartCanvas = await CartCanvasQuery.instance
+        .getCartCanvasByPartner(widget.partner.idPartner);
+    var getCartCanvasItem = await CartCanvasItemQuery.instance
+        .getCartCanvasItemByCartCanvas(getCartCanvas[0].id);
+
+    var total = 0;
+    var tDiscount = 0;
+
+    for (var i = 0; i < getCartCanvasItem.length; i++) {
+      total += (getCartCanvasItem[i].price * getCartCanvasItem[i].quantity);
+
+      var diskonPersentase =
+          ((getCartCanvasItem[i].price * getCartCanvasItem[i].quantity) *
+              (getCartCanvasItem[i].discountPercentage / 100));
+      var diskonRupiah = getCartCanvasItem[i].discountPrice;
+
+      var dataListDiscPercent = await CartCanvasItemDiscountPercentQuery
+          .instance
+          .getCartCanvasItemDiscountPercentByCartCanvasItem(
+              getCartCanvasItem[i].id);
+
+      var dt = '';
+      var discP = 0.0;
+      var listDiscPer = 0.0;
+      for (var i = 0; i < dataListDiscPercent.length; i++) {
+        listDiscPer += dataListDiscPercent[i].percentage;
+        // discP = discP + dataListDiscPercent[i].percentage;
+      }
+
+      var disPer =
+          ((getCartCanvasItem[i].price * getCartCanvasItem[i].quantity) *
+              (listDiscPer / 100));
+      // tDiscount += (diskonPersentase + diskonRupiah).toInt();
+      tDiscount += (disPer + diskonRupiah).toInt();
+    }
+
+    return {'total': total, 'tDiscount': tDiscount};
+  }
+
+  @override
+  void initState() {
+    getCartThisPartner();
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+  }
+
+  getCartThisPartner() async {
+    var getCartCanvas = await CartCanvasQuery.instance
+        .getCartCanvasByPartner(widget.partner.idPartner);
+    if (getCartCanvas.length != 0) {
+      setState(() {
+        dataCartCanvas = getCartCanvas;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Color(0xffB96C3C),
+        title: Text('Buat Pesanan'),
+      ),
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(10.0),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Produk Dipesan',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        Spacer(),
+                        TextButton(
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) {
+                                  return OutsideOrderScreen(
+                                    idPartner: widget.partner.idPartner,
+                                    dataPartner: widget.partner,
+                                  );
+                                },
+                              ),
+                            ).then((_) {
+                              setState(() {});
+                            });
+                          },
+                          child: Text(
+                            '+ tambah produk',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xff4E8910),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(
+                      height: 20,
+                    ),
+                    FutureBuilder(
+                      future: getCartCanvasItemFromCartCanvas(),
+                      builder: (BuildContext context, AsyncSnapshot snapshot) {
+                        if (snapshot.hasData) {
+                          return Column(
+                            children: [
+                              for (var index = 0;
+                                  index < snapshot.data.length;
+                                  index++)
+                                GestureDetector(
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) {
+                                          return EditCartCanvasItem(
+                                            cartCanvasItemData:
+                                                snapshot.data[index],
+                                            partner: widget.partner,
+                                          );
+                                          // return NavPage();
+                                        },
+                                      ),
+                                    ).then((value) {
+                                      setState(() {
+                                        CartCanvasScreen(
+                                          partner: widget.partner,
+                                        );
+                                      });
+                                    });
+                                  },
+                                  child: Column(
+                                    children: [
+                                      SizedBox(
+                                        height: 10,
+                                      ),
+                                      Row(
+                                        children: [
+                                          FutureBuilder(
+                                            future: getProductFromId(
+                                              snapshot.data[index].idProduct,
+                                            ),
+                                            builder: (BuildContext context,
+                                                AsyncSnapshot snapshots) {
+                                              if (snapshots.hasData) {
+                                                return SizedBox(
+                                                  width: MediaQuery.of(context)
+                                                          .size
+                                                          .width *
+                                                      0.7,
+                                                  child: Text(
+                                                    '[${snapshots.data[0].defaultCode}] ${snapshots.data[0].name}',
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                );
+                                              } else {
+                                                return Text(
+                                                  '',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                );
+                                              }
+                                            },
+                                          ),
+                                          Spacer(),
+                                          TextButton(
+                                            onPressed: () async {
+                                              await CartCanvasItemQuery.instance
+                                                  .deleteCartCanvasItemById(
+                                                      snapshot.data[index].id);
+                                              setState(() {});
+                                            },
+                                            child: Icon(Icons.delete,
+                                                color: Color(0xffbdbdbd)),
+                                            style: TextButton.styleFrom(
+                                              minimumSize: Size.zero,
+                                              padding: EdgeInsets.zero,
+                                              tapTargetSize:
+                                                  MaterialTapTargetSize
+                                                      .shrinkWrap,
+                                            ),
+                                          )
+                                        ],
+                                      ),
+                                      Row(
+                                        children: [
+                                          FutureBuilder(
+                                            future: qtyConvertDusNTin(
+                                              snapshot.data[index].quantity,
+                                              snapshot.data[index].idProduct,
+                                            ),
+                                            builder: (BuildContext context,
+                                                AsyncSnapshot snapshots) {
+                                              if (snapshots.hasData) {
+                                                return Text(
+                                                  '${snapshots.data} x Rp ${formatSparator(snapshot.data[index].price)}',
+                                                  style: TextStyle(
+                                                    color: Color(0xff6e6e73),
+                                                  ),
+                                                );
+                                              } else {
+                                                return Text(
+                                                  '',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                );
+                                              }
+                                            },
+                                          ),
+                                          Spacer(),
+                                          FutureBuilder(
+                                            future: getListDiscPercent(
+                                                snapshot.data[index].id),
+                                            builder: (BuildContext context,
+                                                AsyncSnapshot
+                                                    snapshotsDiscPercent) {
+                                              if (snapshotsDiscPercent
+                                                  .hasData) {
+                                                if (snapshotsDiscPercent
+                                                            .data.length ==
+                                                        0 &&
+                                                    snapshot.data[index]
+                                                            .discountPrice ==
+                                                        0) {
+                                                  return Text(
+                                                    'Rp ${formatSparator(snapshot.data[index].price * snapshot.data[index].quantity)}',
+                                                    style: TextStyle(
+                                                      // fontSize: 13,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  );
+                                                } else {
+                                                  return Text(
+                                                    'Rp ${formatSparator(snapshot.data[index].price * snapshot.data[index].quantity)}',
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      color: Color(0xff6e6e73),
+                                                      decoration: TextDecoration
+                                                          .lineThrough,
+                                                    ),
+                                                  );
+                                                }
+                                              } else {
+                                                return Text('');
+                                              }
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                      FutureBuilder(
+                                        future: getListDiscPercent(
+                                            snapshot.data[index].id),
+                                        builder: (BuildContext context,
+                                            AsyncSnapshot
+                                                snapshotsDiscPercent) {
+                                          if (snapshotsDiscPercent.hasData) {
+                                            var dt = '';
+                                            var discP = 0.0;
+                                            for (var i = 0;
+                                                i <
+                                                    snapshotsDiscPercent
+                                                        .data.length;
+                                                i++) {
+                                              dt = '${dt}' +
+                                                  snapshotsDiscPercent
+                                                      .data[i].percentage
+                                                      .toString()
+                                                      .replaceAll(
+                                                          RegExp(
+                                                              r'([.]*0)(?!.*\d)'),
+                                                          '') +
+                                                  '% + ';
+
+                                              discP = discP +
+                                                  snapshotsDiscPercent
+                                                      .data[i].percentage;
+                                            }
+                                            if (discP != 0.0 ||
+                                                snapshot.data[index]
+                                                        .discountPrice !=
+                                                    0) {
+                                              return Row(
+                                                children: [
+                                                  Text(
+                                                    'Disc : ${dt}Rp ${formatSparator(snapshot.data[index].discountPrice)}',
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                  Spacer(),
+                                                  Text(
+                                                    'Rp ${formatSparator((snapshot.data[index].price * snapshot.data[index].quantity) - ((snapshot.data[index].price * snapshot.data[index].quantity) * (discP / 100)) - snapshot.data[index].discountPrice)}',
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ],
+                                              );
+                                            } else {
+                                              return Container();
+                                            }
+                                          } else {
+                                            return Text(
+                                              '',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            );
+                                          }
+                                        },
+                                      ),
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: 5,
+                                          // bottom: 5,
+                                        ),
+                                        child: Container(
+                                          height: 1,
+                                          width:
+                                              MediaQuery.of(context).size.width,
+                                          color: Colors.grey[300],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              SizedBox(
+                                height: 15,
+                              ),
+                            ],
+                          );
+                        } else {
+                          return Container();
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(10.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Free Produk',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        Spacer(),
+                        TextButton(
+                          onPressed: () {
+                            showModalBottomSheet<void>(
+                              isScrollControlled: true,
+                              context: context,
+                              shape: const RoundedRectangleBorder(
+                                borderRadius: BorderRadius.only(
+                                  topLeft: Radius.circular(15.0),
+                                  topRight: Radius.circular(15.0),
+                                ),
+                              ),
+                              builder: (BuildContext context) {
+                                return AddFreeProduct(
+                                  idPartner: widget.partner.idPartner,
+                                  dataPartner: widget.partner,
+                                );
+                              },
+                            );
+                          },
+                          child: Text(
+                            '+ tambah free produk',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xff4E8910),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        top: 5,
+                        // bottom: 5,
+                      ),
+                      child: Container(
+                        height: 1,
+                        width: MediaQuery.of(context).size.width,
+                        color: Colors.grey[300],
+                      ),
+                    ),
+                    SizedBox(
+                      height: 25,
+                    ),
+                    // FutureBuilder(
+                    //   future: getListHadiah(),
+                    //   builder: (BuildContext context,
+                    //       AsyncSnapshot snapshotListHadiah) {
+                    //     if (snapshotListHadiah.hasData) {
+                    //       return Column(
+                    //         children: [
+                    //           for (var index = 0;
+                    //               index < snapshotListHadiah.data.length;
+                    //               index++)
+                    //             FreeProductItem(
+                    //               dataHadiah: snapshotListHadiah.data[index],
+                    //             ),
+                    //         ],
+                    //       );
+                    //     } else {
+                    //       return Container();
+                    //     }
+                    //   },
+                    // ),
+                    //=========== Multi =======================
+                    MultiProvider(
+                      providers: [
+                        ChangeNotifierProvider(
+                          create: (_) => AddHadiahNotifier(),
+                        ),
+                      ],
+                      child: Consumer<AddHadiahNotifier>(
+                        builder: (context, addHadiahNotifier, child) {
+                          if (dataCartCanvas.length != 0) {
+                            addHadiahNotifier
+                                .getHadiahFromDb(dataCartCanvas[0].id);
+                          }
+
+                          return Column(
+                            children: [
+                              for (var index = 0;
+                                  index < addHadiahNotifier.result.length;
+                                  index++)
+                                FreeProductItem(
+                                  dataHadiah: addHadiahNotifier.result[index],
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(10.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Gimmick',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        Spacer(),
+                        TextButton(
+                          onPressed: () async {
+                            return showModalBottomSheet<void>(
+                              isScrollControlled: true,
+                              context: context,
+                              shape: const RoundedRectangleBorder(
+                                borderRadius: BorderRadius.only(
+                                  topLeft: Radius.circular(15.0),
+                                  topRight: Radius.circular(15.0),
+                                ),
+                              ),
+                              builder: (BuildContext context) {
+                                return AddGimmickProduct(
+                                  idPartner: widget.partner.idPartner,
+                                  dataPartner: widget.partner,
+                                );
+                              },
+                            );
+                          },
+                          child: Text(
+                            '+ tambah gimmick',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xff4E8910),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        top: 5,
+                        // bottom: 5,
+                      ),
+                      child: Container(
+                        height: 1,
+                        width: MediaQuery.of(context).size.width,
+                        color: Colors.grey[300],
+                      ),
+                    ),
+                    SizedBox(
+                      height: 25,
+                    ),
+                    // FutureBuilder(
+                    //   future: getListGimmick(),
+                    //   builder: (BuildContext context,
+                    //       AsyncSnapshot snapshotListGimmick) {
+                    //     if (snapshotListGimmick.hasData) {
+                    //       return Column(
+                    //         children: [
+                    //           for (var index = 0;
+                    //               index < snapshotListGimmick.data.length;
+                    //               index++)
+                    //             GimmickItem(
+                    //               dataGimmick: snapshotListGimmick.data[index],
+                    //             ),
+                    //         ],
+                    //       );
+                    //     } else {
+                    //       return Container();
+                    //     }
+                    //   },
+                    // ),
+                    // // Multi =============================
+                    MultiProvider(
+                      providers: [
+                        ChangeNotifierProvider(
+                          create: (_) => AddGimmickNotifier(),
+                        ),
+                      ],
+                      child: Consumer<AddGimmickNotifier>(
+                        builder: (context, addGimmickNotifier, child) {
+                          if (dataCartCanvas.length != 0) {
+                            addGimmickNotifier
+                                .getGimmickFromDb(dataCartCanvas[0].id);
+                          }
+
+                          return Column(
+                            children: [
+                              for (var index = 0;
+                                  index < addGimmickNotifier.result.length;
+                                  index++)
+                                GimmickItem(
+                                  dataGimmick: addGimmickNotifier.result[index],
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(10.0),
+                child: Column(
+                  children: [
+                    SizedBox(
+                      height: 15,
+                    ),
+                    TextFormField(
+                      controller: notePesanan,
+                      keyboardType: TextInputType.text,
+                      decoration: InputDecoration(
+                        label: Text('Catatan Pesanan'),
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    SizedBox(
+                      height: 15,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          //===============================
+          //BARANG DROP
+          //===============================
+          SliverToBoxAdapter(
+            child: Card(
+              child: Column(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(10.0),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.only(
+                          topRight: Radius.circular(4.0),
+                          topLeft: Radius.circular(4.0)),
+                      color: Color(0xffe44e53),
+                    ),
+                    child: Row(
+                      children: [
+                        const Text(
+                          'Drop Produk Dipesan',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.white,
+                          ),
+                        ),
+                        Spacer(),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.all(10.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Padding(
+                        //   padding: const EdgeInsets.only(
+                        //     top: 5,
+                        //     // bottom: 5,
+                        //   ),
+                        //   child: Container(
+                        //     height: 1,
+                        //     width: MediaQuery.of(context).size.width,
+                        //     color: Colors.grey[300],
+                        //   ),
+                        // ),
+                        // SizedBox(
+                        //   height: 15,
+                        // ),
+                        const SizedBox(
+                          height: 15,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(
+                            top: 5,
+                            // bottom: 5,
+                          ),
+                          child: Container(
+                            height: 1,
+                            width: MediaQuery.of(context).size.width,
+                            color: Colors.grey[300],
+                          ),
+                        ),
+                        const SizedBox(
+                          height: 15,
+                        ),
+                        Text(
+                          'Total Qty : 0 Dus 0 Tin',
+                          style: TextStyle(color: Color(0xff979797)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Card(
+              child: Column(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(10.0),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.only(
+                          topRight: Radius.circular(4.0),
+                          topLeft: Radius.circular(4.0)),
+                      color: Color(0xffe44e53),
+                    ),
+                    child: Row(
+                      children: [
+                        const Text(
+                          'Drop Free Produk',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.white,
+                          ),
+                        ),
+                        Spacer(),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.all(10.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // FutureBuilder(
+                        //   future: getListHadiah(),
+                        //   builder: (BuildContext context,
+                        //       AsyncSnapshot snapshotDropFree) {
+                        //     if (snapshotDropFree.hasData) {
+                        //       if (snapshotDropFree.data.length != 0) {
+                        //         return Column(
+                        //           children: [
+                        //             for (var i = 0;
+                        //                 i < snapshotDropFree.data.length;
+                        //                 i++)
+                        //               FreeProductDrop(
+                        //                   dataHadiah: snapshotDropFree.data[i])
+                        //           ],
+                        //         );
+                        //       } else {
+                        //         return Container();
+                        //       }
+                        //     } else {
+                        //       return Container();
+                        //     }
+                        //   },
+                        // ),
+                        MultiProvider(
+                          providers: [
+                            ChangeNotifierProvider(
+                              create: (_) => AddHadiahNotifier(),
+                            ),
+                          ],
+                          child: Consumer<AddHadiahNotifier>(
+                            builder: (context, addHadiahNotifier, child) {
+                              if (dataCartCanvas.length != 0) {
+                                addHadiahNotifier
+                                    .getHadiahFromDb(dataCartCanvas[0].id);
+                              }
+
+                              return Column(
+                                children: [
+                                  for (var index = 0;
+                                      index < addHadiahNotifier.result.length;
+                                      index++)
+                                    FreeProductDrop(
+                                      dataHadiah:
+                                          addHadiahNotifier.result[index],
+                                    ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                        // Padding(
+                        //   padding: const EdgeInsets.only(
+                        //     top: 5,
+                        //     // bottom: 5,
+                        //   ),
+                        //   child: Container(
+                        //     height: 1,
+                        //     width: MediaQuery.of(context).size.width,
+                        //     color: Colors.grey[300],
+                        //   ),
+                        // ),
+                        // SizedBox(
+                        //   height: 15,
+                        // ),
+                        const SizedBox(
+                          height: 15,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Card(
+              child: Column(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(10.0),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.only(
+                          topRight: Radius.circular(4.0),
+                          topLeft: Radius.circular(4.0)),
+                      color: Color(0xffe44e53),
+                    ),
+                    child: Row(
+                      children: [
+                        const Text(
+                          'Drop Gimmick',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.white,
+                          ),
+                        ),
+                        Spacer(),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.all(10.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        MultiProvider(
+                          providers: [
+                            ChangeNotifierProvider(
+                              create: (_) => AddGimmickNotifier(),
+                            ),
+                          ],
+                          child: Consumer<AddGimmickNotifier>(
+                            builder: (context, addGimmickNotifier, child) {
+                              if (dataCartCanvas.length != 0) {
+                                addGimmickNotifier
+                                    .getGimmickFromDb(dataCartCanvas[0].id);
+                              }
+
+                              return Column(
+                                children: [
+                                  for (var index = 0;
+                                      index < addGimmickNotifier.result.length;
+                                      index++)
+                                    GimmickDrop(
+                                      dataGimmick:
+                                          addGimmickNotifier.result[index],
+                                    ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+
+                        // Padding(
+                        //   padding: const EdgeInsets.only(
+                        //     top: 5,
+                        //     // bottom: 5,
+                        //   ),
+                        //   child: Container(
+                        //     height: 1,
+                        //     width: MediaQuery.of(context).size.width,
+                        //     color: Colors.grey[300],
+                        //   ),
+                        // ),
+                        // SizedBox(
+                        //   height: 15,
+                        // ),
+                        const SizedBox(
+                          height: 15,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          FutureBuilder(
+            future: totalCount(),
+            builder: (BuildContext context, AsyncSnapshot snapshotTotalCount) {
+              return SliverToBoxAdapter(
+                child: Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(10.0),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: const [
+                            Text(
+                              'Total Perhitungan',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(
+                          height: 15,
+                        ),
+                        Row(
+                          children: [
+                            Text(
+                              'Total Harga Awal  ',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            Spacer(),
+                            Text(
+                              '${snapshotTotalCount.hasData ? formatRupiah(snapshotTotalCount.data['total']) : ''}',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(
+                          height: 5,
+                        ),
+                        Row(
+                          children: [
+                            Text(
+                              'Total Diskon  ',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            Spacer(),
+                            Text(
+                              '${snapshotTotalCount.hasData ? formatRupiah(snapshotTotalCount.data['tDiscount']) : ''}',
+                              style: TextStyle(
+                                // fontSize: 18,
+                                fontWeight: FontWeight.w500,
+                                // color: Color(0xffF55353),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(
+                          height: 10,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(
+                            top: 5,
+                            // bottom: 5,
+                          ),
+                          child: Container(
+                            height: 1,
+                            width: MediaQuery.of(context).size.width,
+                            color: Color.fromARGB(255, 15, 14, 14),
+                          ),
+                        ),
+                        SizedBox(
+                          height: 10,
+                        ),
+                        Row(
+                          children: [
+                            Text(
+                              'Nett Total ',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            Spacer(),
+                            Text(
+                              '${snapshotTotalCount.hasData ? formatRupiah(snapshotTotalCount.data['total'] - snapshotTotalCount.data['tDiscount']) : ''}',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xffF55353),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.only(left: 10, right: 10),
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: 20,
+                  ),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size(45, 35),
+                      backgroundColor: Color(0xff4E8910),
+                      textStyle: TextStyle(color: Colors.white),
+                    ),
+                    onPressed: () async {
+                      await setLogApiQuotation();
+                    },
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        Text(
+                          'Kirim Pesanan Canvas',
+                          style: TextStyle(
+                            height: 1,
+                            inherit: true,
+                            fontSize: 14,
+                            fontFamily: 'poppins',
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
+                        )
+                      ],
+                    ),
+                  ),
+                  SizedBox(
+                    height: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future setLogApiQuotation() async {
+    // var getCart = getCartItemFromCart();
+    var getCartCanvas = await CartCanvasQuery.instance
+        .getCartCanvasByPartner(widget.partner.idPartner);
+    if (getCartCanvas.length != 0) {
+      var getCartCanvasItem = await CartCanvasItemQuery.instance
+          .getCartCanvasItemByCartCanvas(getCartCanvas[0].id);
+      var getCartCanvasHadiah = await CartCanvasHadiahQuery.instance
+          .getCartCanvasHadiahByCartCanvas(getCartCanvas[0].id);
+      var getCartCanvasGimmick = await CartCanvasGimmickQuery.instance
+          .getCartCanvasGimmickByCartCanvas(getCartCanvas[0].id);
+
+      var dataCartCanvas = [];
+      var dataGimmick = [];
+      var dataDiscountCustOrder = [];
+
+      for (var index = 0; index < getCartCanvasItem.length; index++) {
+        var getProduct = await ProductQuery.instance
+            .getAllProductByProductId(getCartCanvasItem[index].idProduct);
+        var getHadiahByCartCanvasNProduct = await CartCanvasHadiahQuery.instance
+            .getCartCanvasHadiahByCartCanvasNProduct(
+                getCartCanvas[0].id, getCartCanvasItem[index].idProduct);
+
+        var dataListDiscPercent = await CartCanvasItemDiscountPercentQuery
+            .instance
+            .getCartCanvasItemDiscountPercentByCartCanvasItem(
+                getCartCanvasItem[index].id);
+
+        var arrDiscPercent = [];
+
+        if (getCartCanvasItem[index].discountPrice != 0) {
+          dataDiscountCustOrder.add([
+            0,
+            false,
+            {
+              'note': "cash back",
+              'total': getCartCanvasItem[index].discountPrice
+            }
+          ]);
+        }
+
+        if (dataListDiscPercent.length != 0) {
+          for (var indexDiscPercent = 0;
+              indexDiscPercent < dataListDiscPercent.length;
+              indexDiscPercent++) {
+            arrDiscPercent
+                .add(dataListDiscPercent[indexDiscPercent].idDiscount);
+          }
+        }
+
+        // print(arrDiscPercent);
+
+        if (getHadiahByCartCanvasNProduct.length != 0) {
+          var _dus = await productCountDus(
+              (getCartCanvasItem[index].quantity +
+                  getHadiahByCartCanvasNProduct[0].quantity),
+              getProduct[0].totalTinInDus);
+          var _tin = await productCountTin(
+              (getCartCanvasItem[index].quantity +
+                  getHadiahByCartCanvasNProduct[0].quantity),
+              getProduct[0].totalTinInDus);
+
+          dataCartCanvas.add([
+            0,
+            0,
+            {
+              'product_id': getCartCanvasItem[index].idProduct,
+              'price_unit': getCartCanvasItem[index].price,
+              'product_uom_qty': (getCartCanvasItem[index].quantity +
+                  getHadiahByCartCanvasNProduct[0].quantity),
+              'total_tin': _tin,
+              'total_dus': _dus,
+              'tax_id': [
+                [
+                  6,
+                  false,
+                  [37]
+                ]
+              ],
+              'discount_m2m': [
+                [6, false, arrDiscPercent]
+              ],
+              'discount_amount_line': getCartCanvasItem[index].discountPrice,
+            }
+          ]);
+
+          //Inisialisasi Produk Free yang ada pada Cart Item
+          dataCartCanvas.add([
+            0,
+            0,
+            {
+              'product_id': getCartCanvasItem[index].idProduct,
+              'price_unit': getCartCanvasItem[index].price,
+              'product_uom_qty': (getHadiahByCartCanvasNProduct[0].quantity),
+              'total_tin': await productCountTin(
+                  getHadiahByCartCanvasNProduct[0].quantity,
+                  getProduct[0].totalTinInDus),
+              'total_dus': await productCountDus(
+                  getHadiahByCartCanvasNProduct[0].quantity,
+                  getProduct[0].totalTinInDus),
+              'tax_id': [
+                [
+                  6,
+                  false,
+                  [37]
+                ]
+              ],
+              'is_free': true
+            }
+          ]);
+        } else {
+          var _dus = await productCountDus(
+            getCartCanvasItem[index].quantity,
+            getProduct[0].totalTinInDus,
+          );
+          var _tin = await productCountTin(
+            getCartCanvasItem[index].quantity,
+            getProduct[0].totalTinInDus,
+          );
+          dataCartCanvas.add([
+            0,
+            0,
+            {
+              'product_id': getCartCanvasItem[index].idProduct,
+              'price_unit': getCartCanvasItem[index].price,
+              'product_uom_qty': getCartCanvasItem[index].quantity,
+              'total_tin': _tin,
+              'total_dus': _dus,
+              'tax_id': [
+                [
+                  6,
+                  false,
+                  [37]
+                ]
+              ],
+              'discount_m2m': [
+                [6, false, arrDiscPercent]
+              ],
+              'discount_amount_line': getCartCanvasItem[index].discountPrice,
+            }
+          ]);
+        }
+      }
+
+      //Inisialisasi Produk Free yang tidak ada pada Cart Item
+      for (var index = 0; index < getCartCanvasHadiah.length; index++) {
+        var getProduct = await ProductQuery.instance
+            .getAllProductByProductId(getCartCanvasHadiah[index].idProduct);
+        var getCartCanvasItemByCartCanvasNProduct = await CartCanvasItemQuery
+            .instance
+            .getCartCanvasItemByCartCanvasNProduct(
+                getCartCanvas[0].id, getCartCanvasHadiah[index].idProduct);
+        var dtPricelist = await PricelistItemQuery.instance
+            .getPricelistItemByTmplProductNPricelist(
+          getProduct[0].productTmplId,
+          widget.partner.propertyProductPricelist,
+        );
+
+        if (getCartCanvasItemByCartCanvasNProduct.length == 0) {
+          dataCartCanvas.add([
+            0,
+            0,
+            {
+              'product_id': getCartCanvasHadiah[index].idProduct,
+              'price_unit': (dtPricelist.length != 0)
+                  ? dtPricelist[0].fixedPrice.toInt()
+                  : 0,
+              'product_uom_qty': getCartCanvasHadiah[index].quantity,
+              'total_tin': await productCountTin(
+                  getCartCanvasHadiah[0].quantity, getProduct[0].totalTinInDus),
+              'total_dus': await productCountDus(
+                  getCartCanvasHadiah[0].quantity, getProduct[0].totalTinInDus),
+              'tax_id': [
+                [
+                  6,
+                  false,
+                  [37]
+                ]
+              ],
+            }
+          ]);
+
+          dataCartCanvas.add([
+            0,
+            0,
+            {
+              'product_id': getCartCanvasHadiah[index].idProduct,
+              'price_unit': (dtPricelist.length != 0)
+                  ? dtPricelist[0].fixedPrice.toInt()
+                  : 0,
+              'product_uom_qty': getCartCanvasHadiah[index].quantity,
+              'total_tin': await productCountTin(
+                  getCartCanvasHadiah[0].quantity, getProduct[0].totalTinInDus),
+              'total_dus': await productCountDus(
+                  getCartCanvasHadiah[0].quantity, getProduct[0].totalTinInDus),
+              'tax_id': [
+                [
+                  6,
+                  false,
+                  [37]
+                ]
+              ],
+              'is_free': true,
+            }
+          ]);
+        }
+      }
+
+      for (var index = 0; index < getCartCanvasGimmick.length; index++) {
+        var getProduct = await ProductQuery.instance
+            .getGimmickByProductId(getCartCanvasGimmick[index].idProduct);
+        var getCartCanvasGimmickByCartCanvasNProduct = await CartCanvasItemQuery
+            .instance
+            .getCartCanvasItemByCartCanvasNProduct(
+                getCartCanvas[0].id, getCartCanvasHadiah[index].idProduct);
+        dataGimmick.add([
+          0,
+          0,
+          {
+            'qty': getCartCanvasGimmick[index].quantity,
+            'name': '[${getProduct[0].defaultCode}] ${getProduct[0].name}',
+            'product_id': getCartCanvasGimmick[index].idProduct,
+            'product_uom': 1
+          }
+        ]);
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      var warehouse = 0;
+      if (prefs.getInt('branch_id') == 7) {
+        warehouse = 1807;
+      }
+
+      final dataApi = LogApiData(
+        url: 'none',
+        model: 'sale.order',
+        method: 'create',
+        parameter: json.encode({
+          'date_order':
+              DateFormat('yyyy-MM-dd hh:mm:ss').format(DateTime.now()),
+          'warehouse_id': 1807,
+          'sales_id':
+              prefs.getInt('salesman') != 0 ? prefs.getInt('salesman') : false,
+          'branch_id': prefs.getInt('branch_id'),
+          'partner_id': widget.partner.idPartner,
+          'pricelist_id': widget.partner.propertyProductPricelist,
+          'payment_term_id': 12,
+          'note': notePesanan.text,
+          'discount_cust_order':
+              dataDiscountCustOrder.isNotEmpty ? dataDiscountCustOrder : false,
+          'order_line': dataCartCanvas,
+          'gimmic_ids': dataGimmick
+        }),
+        caption:
+            "Input Quotation [${widget.partner.ref}] ${widget.partner.name}",
+        dateTime: DateTime.now(),
+        status: 0,
+      );
+      // print(dataCart);
+      await LogapiQuery.instance.createLogApi(dataApi);
+
+      await CartCanvasQuery.instance.deleteCartCanvasById(getCartCanvas[0].id);
+
+      Navigator.of(context).pop(true);
+    }
+  }
+}
